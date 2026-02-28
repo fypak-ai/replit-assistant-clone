@@ -1,5 +1,10 @@
-// Replit Assistant Clone — app.js
-// State
+// Replit Assistant Clone — app.js (OpenRouter powered)
+const OPENROUTER_API_KEY = "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";
+const MODEL = "liquid/lfm-2.5-1.2b-instruct:free";
+const SITE_URL = "https://github.com/fypak-ai/replit-assistant-clone";
+const SITE_NAME = "Replit Assistant Clone";
+
+// ── State ─────────────────────────────────────────────────────────────────────
 const S = {
   files: {
     "main.py": 'print("Hello, World!")\n',
@@ -11,11 +16,11 @@ const S = {
   activePanel: "assistant",
   secrets: {},
   contextFile: null,
+  chatHistory: [],
 };
 
 const EXT_ICON = {py:"🐍",js:"📜",ts:"📘",html:"🌐",css:"🎨",json:"📋",md:"📝",txt:"📄",sh:"⚙️"};
 const icon = n => EXT_ICON[n.split(".").pop().toLowerCase()] || "📄";
-
 function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -23,7 +28,7 @@ document.addEventListener("DOMContentLoaded", () => {
   renderFileTree();
   openTab(S.activeFile);
   setupListeners();
-  appendMsg("assistant", "👋 Olá! Sou o **Replit Assistant**.\n\nPosso te ajudar com:\n• Propor mudanças em arquivos (Apply)\n• Executar comandos no shell\n• Instalar pacotes\n• Responder dúvidas de código\n• Redirecionar para Secrets ou Deploy quando necessário\n\nO que você quer fazer hoje?");
+  appendMsg("assistant", "👋 Olá! Sou o **Replit Assistant** (powered by OpenRouter).\n\nPosso te ajudar com:\n• Propor mudanças em arquivos (Apply)\n• Executar comandos no shell\n• Instalar pacotes\n• Responder dúvidas de código\n• Redirecionar para Secrets ou Deploy quando necessário\n\nO que você quer fazer hoje?");
 });
 
 // ── File Tree ──────────────────────────────────────────────────────────────────
@@ -121,7 +126,6 @@ function switchPanel(tool){
   const btn = document.querySelector('.nav-btn[data-tool="'+tool+'"]');
   if(btn) btn.classList.add("active");
 
-  // toggle file panel
   const fp = document.getElementById("file-panel");
   const app = document.getElementById("app");
   if(tool==="files"){ fp.classList.toggle("hidden"); app.classList.toggle("show-files"); return; }
@@ -132,7 +136,7 @@ function switchPanel(tool){
   S.activePanel = tool;
 }
 
-// ── Run ───────────────────────────────────────────────────────────────────────
+// ── Run ────────────────────────────────────────────────────────────────────────
 function runCode(){
   if(!S.activeFile) return;
   switchPanel("shell");
@@ -144,13 +148,13 @@ function runCode(){
   else shellAppend("out", "[No runner for ."+ext+" files]");
 }
 function simPython(c){
-  const re = /print\((['"\`])(.*?)\1\)/g; const out=[]; let m;
-  while((m=re.exec(c))!==null) out.push(m[2]);
+  const re = /print\(["'`](.*?)["'`]\)/g; const out=[]; let m;
+  while((m=re.exec(c))!==null) out.push(m[1]);
   return out.length ? out.join("\n") : "(Simulated — no print() found)";
 }
 function simJS(c){
-  const re = /console\.log\((['"\`])(.*?)\1\)/g; const out=[]; let m;
-  while((m=re.exec(c))!==null) out.push(m[2]);
+  const re = /console\.log\(["'`](.*?)["'`]\)/g; const out=[]; let m;
+  while((m=re.exec(c))!==null) out.push(m[1]);
   return out.length ? out.join("\n") : "(Simulated — no console.log() found)";
 }
 
@@ -179,9 +183,7 @@ function shellRun(raw){
 }
 function shellAppend(cls, txt){
   const out=document.getElementById("shell-output");
-  const s=document.createElement("span");
-  s.className="sline "+cls;
-  s.textContent=txt;
+  const s=document.createElement("span"); s.className="sline "+cls; s.textContent=txt;
   out.appendChild(s); out.appendChild(document.createElement("br"));
   out.scrollTop=out.scrollHeight;
 }
@@ -201,7 +203,7 @@ function renderSecrets(){
   list.innerHTML="";
   Object.entries(S.secrets).forEach(([k])=>{
     const d=document.createElement("div"); d.className="secret-item";
-    d.innerHTML='<span class="key">'+esc(k)+'</span><span class="val">••••••••</span><button onclick="delSecret(''+esc(k)+'')">×</button>';
+    d.innerHTML='<span class="key">'+esc(k)+'</span><span class="val">••••••••</span><button onclick="delSecret(\''+esc(k)+'\')">×</button>';
     list.appendChild(d);
   });
 }
@@ -222,112 +224,167 @@ function simulateDeploy(){
   },600);
 }
 
-// ── AI Chat ───────────────────────────────────────────────────────────────────
-function sendMsg(){
-  const inp=document.getElementById("chat-input");
-  const txt=inp.value.trim(); if(!txt) return;
-  inp.value="";
+// ── AI Chat (OpenRouter) ──────────────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are Replit Assistant, an AI programming assistant embedded inside an online IDE called Replit.
+
+Your role is to assist users with coding tasks. You MUST:
+1. Focus on the user's request precisely, adhering to existing code patterns.
+2. Propose file changes when asked to modify/create code.
+3. Suggest shell commands when needed (installation, setup, etc.).
+4. Answer coding questions with clear natural language responses.
+5. Nudge users towards the Secrets tool for API keys/environment variables.
+6. Nudge users towards the Deploy tool for publishing/deploying projects.
+
+When proposing file changes, format your response as JSON at the end using this exact structure:
+<ACTIONS>
+[
+  {"type":"file_edit","file":"filename.py","code":"full new content here","summary":"brief description"},
+  {"type":"shell","cmd":"npm install express","summary":"Install express"},
+  {"type":"package","pkg":"requests","summary":"Install requests"},
+  {"type":"nudge","tool":"secrets","msg":"Use Secrets panel to store your API key"},
+  {"type":"nudge","tool":"deploy","msg":"Use Deploy panel to publish your project"}
+]
+</ACTIONS>
+
+Only include the <ACTIONS> block when you actually want to propose changes. The text before <ACTIONS> is your natural language explanation.`;
+
+function buildContextMsg(userText){
+  let content = userText;
+  if(S.contextFile && S.files[S.contextFile]){
+    content = "Current file context (" + S.contextFile + "):\n```\n" + S.files[S.contextFile] + "\n```\n\nUser question: " + userText;
+  }
+  return content;
+}
+
+async function callOpenRouter(messages){
+  const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + OPENROUTER_API_KEY,
+      "HTTP-Referer": SITE_URL,
+      "X-Title": SITE_NAME,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: 1024,
+    })
+  });
+  if(!resp.ok){
+    const err = await resp.text();
+    throw new Error("OpenRouter error " + resp.status + ": " + err);
+  }
+  const data = await resp.json();
+  return data.choices[0].message.content;
+}
+
+function parseActions(text){
+  const match = text.match(/<ACTIONS>([\s\S]*?)<\/ACTIONS>/);
+  if(!match) return { cleanText: text, actions: [] };
+  let actions = [];
+  try { actions = JSON.parse(match[1].trim()); } catch(e) { console.warn("Failed to parse actions:", e); }
+  const cleanText = text.replace(/<ACTIONS>[\s\S]*?<\/ACTIONS>/, "").trim();
+  return { cleanText, actions };
+}
+
+function setTyping(show){
+  let el = document.getElementById("typing-indicator");
+  if(show){
+    if(!el){
+      el = document.createElement("div");
+      el.id = "typing-indicator";
+      el.className = "msg assistant";
+      el.innerHTML = '<div class="msg-role">Replit Assistant</div><div class="msg-body typing-dots"><span>.</span><span>.</span><span>.</span></div>';
+      document.getElementById("chat-messages").appendChild(el);
+      document.getElementById("chat-messages").scrollTop = 9999;
+    }
+  } else {
+    if(el) el.remove();
+  }
+}
+
+async function sendMsg(){
+  const inp = document.getElementById("chat-input");
+  const txt = inp.value.trim();
+  if(!txt) return;
+  inp.value = "";
+  inp.disabled = true;
+  document.getElementById("send-btn").disabled = true;
+
   appendMsg("user", txt);
-  setTimeout(()=>{
-    const r=genResponse(txt, S.contextFile);
-    appendMsg("assistant", r.text, r.actions);
-  },350);
+
+  const userContent = buildContextMsg(txt);
+  S.chatHistory.push({ role: "user", content: userContent });
+
+  // Keep history bounded (last 10 exchanges)
+  const historyWindow = S.chatHistory.slice(-20);
+  const messages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    ...historyWindow
+  ];
+
+  setTyping(true);
+  try {
+    const raw = await callOpenRouter(messages);
+    setTyping(false);
+    const { cleanText, actions } = parseActions(raw);
+    S.chatHistory.push({ role: "assistant", content: raw });
+    appendMsg("assistant", cleanText, actions);
+  } catch(err) {
+    setTyping(false);
+    appendMsg("assistant", "⚠️ Erro ao chamar OpenRouter: " + err.message + "\n\nVerifique se a chave API está válida no código.");
+    console.error(err);
+  } finally {
+    inp.disabled = false;
+    document.getElementById("send-btn").disabled = false;
+    inp.focus();
+  }
 }
 
 function appendMsg(role, text, actions){
-  const c=document.getElementById("chat-messages");
-  const wrap=document.createElement("div"); wrap.className="msg "+role;
-  const rl=document.createElement("div"); rl.className="msg-role";
-  rl.textContent=role==="user"?"You":"Replit Assistant";
-  const body=document.createElement("div"); body.className="msg-body";
-  body.textContent=text;
+  const c = document.getElementById("chat-messages");
+  const wrap = document.createElement("div"); wrap.className = "msg " + role;
+  const rl = document.createElement("div"); rl.className = "msg-role";
+  rl.textContent = role === "user" ? "You" : "Replit Assistant";
+  const body = document.createElement("div"); body.className = "msg-body";
+  body.textContent = text;
   wrap.appendChild(rl); wrap.appendChild(body);
-  if(actions&&actions.length) actions.forEach(a=>wrap.appendChild(buildCard(a)));
-  c.appendChild(wrap); c.scrollTop=c.scrollHeight;
+  if(actions && actions.length) actions.forEach(a => wrap.appendChild(buildCard(a)));
+  c.appendChild(wrap); c.scrollTop = c.scrollHeight;
 }
 
 function buildCard(a){
-  const card=document.createElement("div"); card.className="proposed-action";
-  const typeMap={file_edit:["File Edit","file-edit"],shell:["Shell","shell"],package:["Package Install","package"],nudge:["Tool","nudge"]};
-  const [badgeTxt,badgeCls]=typeMap[a.type]||["Action","file-edit"];
-  let pre="";
-  if(a.type==="file_edit") pre=(a.file||"?")+"\n"+a.code;
-  else if(a.type==="shell") pre="$ "+a.cmd;
-  else if(a.type==="package") pre="pip install "+a.pkg;
-  else pre=a.msg||"";
-  card.innerHTML='<div class="proposed-action-header"><div class="proposed-action-type"><span class="action-badge '+badgeCls+'">'+badgeTxt+'</span>'+(a.file?'<span style="font-size:12px;color:var(--muted)">'+esc(a.file)+'</span>':"")+'</div></div><pre>'+esc(pre)+'</pre><div class="action-buttons"><button class="btn-apply">Apply</button><button class="btn-dismiss">Dismiss</button></div>';
-  card.querySelector(".btn-apply").onclick=()=>applyCard(a,card);
-  card.querySelector(".btn-dismiss").onclick=()=>card.remove();
+  const card = document.createElement("div"); card.className = "proposed-action";
+  const typeMap = { file_edit:["File Edit","file-edit"], shell:["Shell","shell"], package:["Package Install","package"], nudge:["Tool","nudge"] };
+  const [badgeTxt, badgeCls] = typeMap[a.type] || ["Action","file-edit"];
+  let pre = "";
+  if(a.type==="file_edit") pre = (a.file||"?") + "\n" + (a.code||"");
+  else if(a.type==="shell") pre = "$ " + (a.cmd||"");
+  else if(a.type==="package") pre = "pip install " + (a.pkg||"");
+  else pre = a.msg || "";
+  card.innerHTML = '<div class="proposed-action-header"><div class="proposed-action-type"><span class="action-badge '+badgeCls+'">'+badgeTxt+'</span>'+(a.file?'<span style="font-size:12px;color:var(--muted)">'+esc(a.file)+'</span>':"")+(a.summary?'<span style="font-size:12px;color:var(--muted)">'+esc(a.summary)+'</span>':"")+' </div></div><pre>'+esc(pre)+'</pre><div class="action-buttons"><button class="btn-apply">Apply</button><button class="btn-dismiss">Dismiss</button></div>';
+  card.querySelector(".btn-apply").onclick = () => applyCard(a, card);
+  card.querySelector(".btn-dismiss").onclick = () => card.remove();
   return card;
 }
 
-function applyCard(a,card){
+function applyCard(a, card){
   if(a.type==="file_edit"){
-    const t=a.file||S.activeFile;
-    if(!S.files[t]) S.files[t]="";
-    S.files[t]=a.code;
+    const t = a.file || S.activeFile;
+    if(!S.files[t]) S.files[t] = "";
+    S.files[t] = a.code || "";
     renderFileTree(); openTab(t);
-    shellAppend("out","Applied changes to "+t);
+    shellAppend("out", "Applied changes to " + t);
   } else if(a.type==="shell"){
-    switchPanel("shell"); shellRun(a.cmd);
+    switchPanel("shell"); shellRun(a.cmd||"");
   } else if(a.type==="package"){
-    switchPanel("shell"); shellRun("pip install "+a.pkg);
+    switchPanel("shell"); shellRun("pip install " + (a.pkg||""));
   } else if(a.type==="nudge"){
     switchPanel(a.tool);
   }
-  const btn=card.querySelector(".btn-apply");
-  btn.textContent="✓ Applied"; btn.disabled=true;
-  card.querySelector(".btn-dismiss").style.display="none";
-}
-
-// ── Response Engine ────────────────────────────────────────────────────────────
-function genResponse(txt, ctxFile){
-  const lo=txt.toLowerCase();
-
-  if(/api.?key|secret|env|environment|openai|openrouter/i.test(txt))
-    return {text:"Para configurar API keys e segredos, use a ferramenta Secrets — é o lugar seguro para variáveis de ambiente.", actions:[{type:"nudge",tool:"secrets",msg:"Abra o painel Secrets para adicionar sua chave."}]};
-
-  if(/deploy|publish|produção|production|publicar|live/i.test(txt))
-    return {text:"Para publicar seu projeto, use a ferramenta Deploy.", actions:[{type:"nudge",tool:"deploy",msg:"Abra o painel Deploy."}]};
-
-  const installM=txt.match(/install\s+([\w\-]+)/i)||txt.match(/instalar\s+([\w\-]+)/i);
-  if(installM) return {text:"Instalando o pacote `"+installM[1]+"`.", actions:[{type:"package",pkg:installM[1]}]};
-
-  if(/add.*(function|método|def|class|classe)/i.test(txt)||/create.*function/i.test(txt)){
-    const f=ctxFile||S.activeFile||"main.py";
-    const ext=f.split(".").pop();
-    let code=S.files[f]||"";
-    if(ext==="py") code+="\ndef nova_funcao():\n    pass\n";
-    else code+="\nfunction novaFuncao() {\n  // TODO\n}\n";
-    return {text:"Adicionei uma nova função em `"+f+"`.", actions:[{type:"file_edit",file:f,code}]};
-  }
-
-  if(/hello world|ola mundo/i.test(txt)){
-    const f=ctxFile||S.activeFile||"main.py";
-    const ext=f.split(".").pop();
-    let code="";
-    if(ext==="py") code='print("Hello, World!")\n';
-    else if(ext==="js") code='console.log("Hello, World!");\n';
-    else if(ext==="html") code='<!DOCTYPE html>\n<html>\n<body>\n<h1>Hello, World!</h1>\n</body>\n</html>\n';
-    else code="Hello, World!";
-    return {text:"Aqui está um Hello World para `"+f+"`:", actions:[{type:"file_edit",file:f,code}]};
-  }
-
-  if(/run|rodar|executar|execute/i.test(txt))
-    return {text:"Clique no botão Run (verde, parte superior) para executar o arquivo ativo. No Shell você pode rodar `python main.py` manualmente.", actions:[]};
-
-  const newF=txt.match(/cri[ae].*?([a-z_\-]+\.[a-z]+)/i)||txt.match(/new file.*?([a-z_\-]+\.[a-z]+)/i);
-  if(newF){ const fn=newF[1]; if(!S.files[fn]) S.files[fn]=""; renderFileTree(); openTab(fn); return {text:"Arquivo `"+fn+"` criado.", actions:[]}; }
-
-  if(/como|o que|explain|what is/i.test(txt)) return {text:quickAnswer(txt), actions:[]};
-
-  return {text:"Entendido! Me dê mais detalhes sobre o que quer implementar e posso propor mudanças nos arquivos diretamente.", actions:[]};
-}
-
-function quickAnswer(txt){
-  if(/map|filter|reduce/i.test(txt)) return "map/filter/reduce são funções de alta ordem.\n\nExemplo Python:\nresult = list(map(lambda x: x*2, [1,2,3]))\n# [2, 4, 6]";
-  if(/lambda/i.test(txt)) return "Lambda é uma função anônima de uma linha.\nPython: f = lambda x: x * 2\nJS: const f = x => x * 2";
-  if(/async|await/i.test(txt)) return "async/await é syntactic sugar sobre Promises.\nasync function fetch() {\n  const r = await api.get(url);\n  return r.json();\n}";
-  if(/list.*comprehension/i.test(txt)) return "List comprehension Python:\nquadrados = [x**2 for x in range(10)]";
-  return "Boa pergunta! Mostre o código relevante e posso sugerir mudanças nos arquivos.";
+  const btn = card.querySelector(".btn-apply");
+  btn.textContent = "✓ Applied"; btn.disabled = true;
+  card.querySelector(".btn-dismiss").style.display = "none";
 }
