@@ -1,5 +1,5 @@
 // Replit Assistant Clone — app.js (OpenRouter powered)
-const OPENROUTER_API_KEY = "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";
+const OPENROUTER_API_KEY = "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";
 const MODEL = "mistralai/mistral-7b-instruct:free";
 const MODEL_FALLBACK = "liquid/lfm-2.5-1.2b-instruct:free";
 const SITE_URL = "https://github.com/fypak-ai/replit-assistant-clone";
