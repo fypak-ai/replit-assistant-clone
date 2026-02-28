@@ -1,6 +1,7 @@
 // Replit Assistant Clone — app.js (OpenRouter powered)
 const OPENROUTER_API_KEY = "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";
-const MODEL = "liquid/lfm-2.5-1.2b-instruct:free";
+const MODEL = "mistralai/mistral-7b-instruct:free";
+const MODEL_FALLBACK = "liquid/lfm-2.5-1.2b-instruct:free";
 const SITE_URL = "https://github.com/fypak-ai/replit-assistant-clone";
 const SITE_NAME = "Replit Assistant Clone";
 
@@ -256,28 +257,36 @@ function buildContextMsg(userText){
   return content;
 }
 
-async function callOpenRouter(messages){
+async function callOpenRouter(messages, model) {
+  model = model || MODEL;
   const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": "Bearer " + OPENROUTER_API_KEY,
-      "HTTP-Referer": SITE_URL,
-      "X-Title": SITE_NAME,
+      "HTTP-Referer": "https://github.com/fypak-ai/replit-assistant-clone",
+      "X-Title": "Replit Assistant Clone",
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: model,
       messages: messages,
       temperature: 0.7,
       max_tokens: 1024,
     })
   });
-  if(!resp.ok){
-    const err = await resp.text();
-    throw new Error("OpenRouter error " + resp.status + ": " + err);
+  const rawText = await resp.text();
+  if (!resp.ok) {
+    // Try fallback model once
+    if (model !== MODEL_FALLBACK) {
+      console.warn("Model " + model + " failed (" + resp.status + "), trying fallback...");
+      return callOpenRouter(messages, MODEL_FALLBACK);
+    }
+    throw new Error("HTTP " + resp.status + " — " + rawText.slice(0, 300));
   }
-  const data = await resp.json();
-  return data.choices[0].message.content;
+  let json;
+  try { json = JSON.parse(rawText); } catch(e) { throw new Error("JSON parse error: " + rawText.slice(0, 200)); }
+  if (!json.choices || !json.choices[0]) throw new Error("Resposta inesperada: " + JSON.stringify(json).slice(0, 200));
+  return json.choices[0].message.content;
 }
 
 function parseActions(text){
@@ -334,8 +343,10 @@ async function sendMsg(){
     appendMsg("assistant", cleanText, actions);
   } catch(err) {
     setTyping(false);
-    appendMsg("assistant", "⚠️ Erro ao chamar OpenRouter: " + err.message + "\n\nVerifique se a chave API está válida no código.");
-    console.error(err);
+    const errMsg = "⚠️ Erro OpenRouter:\n" + err.message
+      + "\n\nDicas:\n• Abra o Console do browser (F12) para ver detalhes\n• Verifique se está acessando via http://localhost e não file://\n• Modelo pode estar fora do ar — tente recarregar";
+    appendMsg("assistant", errMsg);
+    console.error("[OpenRouter Error]", err);
   } finally {
     inp.disabled = false;
     document.getElementById("send-btn").disabled = false;
